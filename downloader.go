@@ -39,12 +39,47 @@ func NewDownloader(option Option) *Downloader {
 		Plugins:       NewPluginManager(),
 		SuccessImages: map[string][]string{},
 	}
+
+	_ = d.registerConfiguredPlugins()
 	_ = d.Plugins.AfterInit(PluginContext{Option: &d.Option, Downloader: d, Client: d.Client})
 	return d
 }
 
 func (d *Downloader) RegisterPlugin(plugin Plugin) {
 	d.Plugins.Register(plugin)
+}
+
+func (d *Downloader) registerConfiguredPlugins() error {
+	groups := [][]PluginConfig{
+		d.Option.Plugins.AfterInit,
+		d.Option.Plugins.BeforeAlbum,
+		d.Option.Plugins.AfterAlbum,
+		d.Option.Plugins.BeforePhoto,
+		d.Option.Plugins.AfterPhoto,
+		d.Option.Plugins.BeforeImage,
+		d.Option.Plugins.AfterImage,
+	}
+
+	seen := map[string]bool{}
+	for _, g := range groups {
+		for _, cfg := range g {
+			key := cfg.Plugin
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			p, err := BuildPluginFromConfig(cfg)
+			if err != nil {
+				if cfg.Safe {
+					continue
+				}
+				return err
+			}
+			d.Plugins.RegisterWithPolicy(p, cfg.Safe, cfg.Log, cfg.Valid)
+		}
+	}
+	return nil
 }
 
 func (d *Downloader) DownloadAlbum(albumID string) (*AlbumDetail, error) {
@@ -55,7 +90,9 @@ func (d *Downloader) DownloadAlbum(albumID string) (*AlbumDetail, error) {
 
 	ctx := PluginContext{Option: &d.Option, Downloader: d, Client: d.Client}
 	_ = d.Plugins.BeforeAlbum(ctx, album)
-	defer d.Plugins.SafeRun(func(p Plugin) error { return p.AfterAlbum(ctx, album) })
+	defer func() {
+		_ = d.Plugins.AfterAlbum(ctx, album)
+	}()
 
 	photoIDs := album.EpisodeIDs
 	if len(photoIDs) == 0 {
@@ -100,7 +137,9 @@ func (d *Downloader) DownloadPhoto(photoID string) (*PhotoDetail, error) {
 
 	ctx := PluginContext{Option: &d.Option, Downloader: d, Client: d.Client}
 	_ = d.Plugins.BeforePhoto(ctx, photo)
-	defer d.Plugins.SafeRun(func(p Plugin) error { return p.AfterPhoto(ctx, photo) })
+	defer func() {
+		_ = d.Plugins.AfterPhoto(ctx, photo)
+	}()
 
 	album := AlbumDetail{ID: photo.AlbumID, Name: photo.AlbumID}
 	saveDir, err := d.Option.DecideImageSaveDir(album, *photo)
