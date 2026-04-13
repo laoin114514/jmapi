@@ -31,12 +31,19 @@ var (
 	reAlbumTagsBlock       = regexp.MustCompile(`<span itemprop="genre" data-type="tags">([\s\S]*?)</span>`)
 	reTagA                 = regexp.MustCompile(`<a[^>]*?>\s*(\S*)\s*</a>`)
 	reAlbumPhotoIDs        = regexp.MustCompile(`/photo/(\d+)/`)
+	reAlbumScrambleID      = regexp.MustCompile(`var scramble_id = (\d+);`)
+	reAlbumPubDate         = regexp.MustCompile(`>上架日期 : (.*?)</span>`)
+	reAlbumUpdateDate      = regexp.MustCompile(`>更新日期 : (.*?)</span>`)
+	reAlbumEpisodeList     = regexp.MustCompile(`data-album="(\d+)"[^>]*>[\s\S]*?第(\d+)[话話]([\s\S]*?)<[\s\S]*?>`)
 
 	rePhotoScrambleID  = regexp.MustCompile(`var scramble_id = (\d+);`)
 	rePhotoSeriesID    = regexp.MustCompile(`var series_id = (\d+);`)
 	rePhotoSort        = regexp.MustCompile(`var sort = (\d+);`)
 	rePhotoPageArr     = regexp.MustCompile(`var page_arr = (.*?);`)
 	rePhotoName        = regexp.MustCompile(`<title>([\s\S]*?)\|.*</title>`)
+	rePhotoTags        = regexp.MustCompile(`<meta name="keywords"[\s\S]*?content="(.*?)"`)
+	rePhotoDataOriginalDomain = regexp.MustCompile(`src="https://(.*?)/media/albums/blank`)
+	rePhotoDataOriginal0      = regexp.MustCompile(`data-original="(.*?)"[^>]*?id="album_photo[^>]*?data-page="0"`)
 
 	reSearchShortenFor         = regexp.MustCompile(`<div class="well well-sm">([\s\S]*)<div class="row">`)
 	reSearchAlbumInfoList      = regexp.MustCompile(`<a href="/album/(\d+)/[\s\S]*?title="(.*?)"([\s\S]*?)<div class="title-truncate tags .*>([\s\S]*?)</div>`)
@@ -222,6 +229,15 @@ func (h *htmlImpl) GetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	if m := reAlbumCommentCount.FindStringSubmatch(html); len(m) >= 2 {
 		ret.CommentCount, _ = strconv.Atoi(strings.TrimSpace(m[1]))
 	}
+	if m := reAlbumScrambleID.FindStringSubmatch(html); len(m) >= 2 {
+		ret.ScrambleID = strings.TrimSpace(m[1])
+	}
+	if m := reAlbumPubDate.FindStringSubmatch(html); len(m) >= 2 {
+		ret.PubDate = strings.TrimSpace(stripTags(m[1]))
+	}
+	if m := reAlbumUpdateDate.FindStringSubmatch(html); len(m) >= 2 {
+		ret.UpdateDate = strings.TrimSpace(stripTags(m[1]))
+	}
 
 	if m := reAlbumAuthorsBlock.FindStringSubmatch(html); len(m) >= 2 {
 		ret.Author = h.parseTagBlock(m[1])
@@ -237,6 +253,28 @@ func (h *htmlImpl) GetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	}
 
 	ret.EpisodeIDs = findAllUnique(reAlbumPhotoIDs, html)
+	// 结构化 episode_list（尽量解析；解析不到也不影响 EpisodeIDs）
+	if matches := reAlbumEpisodeList.FindAllStringSubmatch(html, -1); len(matches) != 0 {
+		ret.EpisodeList = make([]Episode, 0, len(matches))
+		seen := map[string]bool{}
+		for _, m := range matches {
+			if len(m) < 4 {
+				continue
+			}
+			pid := strings.TrimSpace(m[1])
+			if pid == "" || seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			idx, _ := strconv.Atoi(strings.TrimSpace(m[2]))
+			title := strings.TrimSpace(htmlUnescape(stripTags(m[3])))
+			ret.EpisodeList = append(ret.EpisodeList, Episode{
+				PhotoID: pid,
+				Index:   idx,
+				Title:   title,
+			})
+		}
+	}
 	return ret, nil
 }
 
@@ -256,11 +294,35 @@ func (h *htmlImpl) GetPhotoDetail(photoID string, fetchAlbum bool, fetchScramble
 		ret.SeriesID = ret.AlbumID
 	}
 	if m := rePhotoSort.FindStringSubmatch(html); len(m) >= 2 {
-		ret.Sort = strings.TrimSpace(m[1])
+		ret.Sort, _ = strconv.Atoi(strings.TrimSpace(m[1]))
 	}
 	if fetchScrambleID {
 		if m := rePhotoScrambleID.FindStringSubmatch(html); len(m) >= 2 {
 			ret.ScrambleID = strings.TrimSpace(m[1])
+		}
+	}
+	if m := rePhotoTags.FindStringSubmatch(html); len(m) >= 2 {
+		raw := strings.TrimSpace(htmlUnescape(stripTags(m[1])))
+		if raw != "" {
+			// html 端通常是逗号分隔
+			parts := strings.Split(raw, ",")
+			out := make([]string, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					out = append(out, p)
+				}
+			}
+			ret.Tags = out
+		}
+	}
+	if m := rePhotoDataOriginalDomain.FindStringSubmatch(html); len(m) >= 2 {
+		ret.DataOriginalDomain = strings.TrimSpace(m[1])
+	}
+	if m := rePhotoDataOriginal0.FindStringSubmatch(html); len(m) >= 2 {
+		ret.DataOriginal0 = strings.TrimSpace(htmlUnescape(m[1]))
+		if idx := strings.LastIndex(ret.DataOriginal0, "?"); idx >= 0 && idx+1 < len(ret.DataOriginal0) {
+			ret.DataOriginalQuery = strings.TrimSpace(ret.DataOriginal0[idx+1:])
 		}
 	}
 	if m := rePhotoPageArr.FindStringSubmatch(html); len(m) >= 2 {
@@ -275,7 +337,14 @@ func (h *htmlImpl) GetPhotoDetail(photoID string, fetchAlbum bool, fetchScramble
 	}
 
 	if fetchAlbum && ret.AlbumID != "" {
-		_, _ = h.GetAlbumDetail(ret.AlbumID)
+		alb, err := h.GetAlbumDetail(ret.AlbumID)
+		if err == nil {
+			ret.FromAlbum = alb
+			if len(ret.Tags) == 0 && alb != nil && len(alb.Tags) != 0 {
+				ret.Tags = append([]string{}, alb.Tags...)
+			}
+			_ = ret.EnsureAuthor("")
+		}
 	}
 	return ret, nil
 }
@@ -499,8 +568,10 @@ func (h *htmlImpl) DownloadByImageDetail(photoID, imageName string) ([]byte, err
 		}
 		imageName = photo.PageArr[0]
 	}
-	// 简化：沿用 CDN 规则（与 API 版一致）
-	imgURL := fmt.Sprintf("https://cdn-msp.jmapiproxy1.cc/media/photos/%s/%s", photo.AlbumID, imageName)
+	imgURL, err := photo.ImageURL(imageName)
+	if err != nil {
+		return nil, err
+	}
 	return h.DownloadImage(imgURL)
 }
 

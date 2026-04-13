@@ -464,10 +464,15 @@ func (c *Client) parseSearchResult(obj map[string]any) *SearchResult {
 		}
 		ret.Items = append(ret.Items, AlbumListItem{
 			ID:       toStr(m["id"]),
+			Author:   toStr(m["author"]),
+			Description: toStr(m["description"]),
+			Image:    toStr(m["image"]),
 			Name:     toStr(m["name"]),
 			Label:    toStr(m["label"]),
 			Category: toStr(m["category"]),
+			CategorySub: toStr(m["category_sub"]),
 			TagList:  toStrSlice(m["tag_list"]),
+			Raw:      m,
 		})
 	}
 	return ret
@@ -484,6 +489,7 @@ func (c *Client) apiGetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	ret := &AlbumDetail{ID: albumID, Raw: obj}
 	ret.ID = toStr(obj["id"])
 	ret.Name = toStr(obj["name"])
+	ret.ScrambleID = toStr(obj["scramble_id"])
 	ret.Description = toStr(obj["description"])
 	ret.Author = toStrSlice(obj["author"])
 	ret.Tags = toStrSlice(obj["tags"])
@@ -491,8 +497,60 @@ func (c *Client) apiGetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	ret.Actors = toStrSlice(obj["actors"])
 	ret.PageCount = toInt(obj["page_count"])
 	ret.CommentCount = toInt(obj["comment_total"])
+	ret.PubDate = toStr(obj["pub_date"])
+	ret.UpdateDate = toStr(obj["update_date"])
 	ret.Likes = toStr(obj["likes"])
 	ret.Views = toStr(obj["views"])
+
+	// episode_list: [{id|photo_id, sort|index, name|title, pub_date}, ...]
+	if raw, ok := obj["episode_list"].([]any); ok && len(raw) != 0 {
+		ret.EpisodeList = make([]Episode, 0, len(raw))
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			ep := Episode{
+				PhotoID: toStr(m["photo_id"]),
+				Index:   toInt(m["index"]),
+				Title:   toStr(m["title"]),
+				PubDate: toStr(m["pub_date"]),
+			}
+			if ep.PhotoID == "" {
+				ep.PhotoID = toStr(m["id"])
+			}
+			if ep.Index == 0 {
+				ep.Index = toInt(m["sort"])
+			}
+			if ep.Title == "" {
+				ep.Title = toStr(m["name"])
+			}
+			ret.EpisodeList = append(ret.EpisodeList, ep)
+		}
+	}
+
+	// related_list（尽量适配多种返回结构）
+	if raw, ok := obj["related_list"].([]any); ok && len(raw) != 0 {
+		ret.RelatedList = make([]AlbumListItem, 0, len(raw))
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			ret.RelatedList = append(ret.RelatedList, AlbumListItem{
+				ID:          toStr(m["id"]),
+				Name:        toStr(m["name"]),
+				Author:      toStr(m["author"]),
+				Description: toStr(m["description"]),
+				Image:       toStr(m["image"]),
+				Label:       toStr(m["label"]),
+				Category:    toStr(m["category"]),
+				CategorySub: toStr(m["category_sub"]),
+				TagList:     toStrSlice(m["tag_list"]),
+				Raw:         m,
+			})
+		}
+	}
 	return ret, nil
 }
 
@@ -507,8 +565,9 @@ func (c *Client) apiGetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambl
 	ret.Name = toStr(obj["name"])
 	ret.AlbumID = toStr(obj["series_id"])
 	ret.SeriesID = ret.AlbumID
-	ret.Sort = toStr(obj["sort"])
+	ret.Sort = toInt(obj["sort"])
 	ret.PageArr = toStrSlice(obj["images"])
+	ret.Tags = toStrSlice(obj["tags"])
 
 	if fetchScrambleID {
 		sid, err := c.apiGetScrambleID(photoID)
@@ -517,7 +576,14 @@ func (c *Client) apiGetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambl
 		}
 	}
 	if fetchAlbum && ret.AlbumID != "" {
-		_, _ = c.apiGetAlbumDetail(ret.AlbumID)
+		alb, err := c.apiGetAlbumDetail(ret.AlbumID)
+		if err == nil {
+			ret.FromAlbum = alb
+			if len(ret.Tags) == 0 && alb != nil && len(alb.Tags) != 0 {
+				ret.Tags = append([]string{}, alb.Tags...)
+			}
+			_ = ret.EnsureAuthor("")
+		}
 	}
 
 	return ret, nil
@@ -706,8 +772,10 @@ func (c *Client) apiDownloadByImageDetail(photoID, imageName string) ([]byte, er
 		imageName = photo.PageArr[0]
 	}
 
-	domain := "cdn-msp.jmapiproxy1.cc"
-	imgURL := fmt.Sprintf("https://%s/media/photos/%s/%s", domain, photo.AlbumID, imageName)
+	imgURL, err := photo.ImageURL(imageName)
+	if err != nil {
+		return nil, err
+	}
 	return c.apiDownloadImage(imgURL)
 }
 

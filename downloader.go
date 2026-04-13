@@ -171,7 +171,18 @@ func (d *Downloader) DownloadPhoto(photoID string) (*PhotoDetail, error) {
 				if job.name == "" {
 					continue
 				}
-				imgURL := fmt.Sprintf("https://cdn-msp.jmapiproxy1.cc/media/photos/%s/%s", photo.AlbumID, job.name)
+				imgURL, err := photo.ImageURL(job.name)
+				if err != nil {
+					d.mu.Lock()
+					d.FailedImages = append(d.FailedImages, ImageFailure{
+						PhotoID:  photo.ID,
+						ImageURL: "",
+						SavePath: "",
+						Err:      err,
+					})
+					d.mu.Unlock()
+					continue
+				}
 				suffix := filepath.Ext(job.name)
 				if suffix == "" {
 					suffix = ".jpg"
