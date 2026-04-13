@@ -569,6 +569,12 @@ func (c *Client) apiGetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambl
 	ret.PageArr = toStrSlice(obj["images"])
 	ret.Tags = toStrSlice(obj["tags"])
 
+	// API 端一般不返回 data-original 域名与 v 参数；这里保持空，由后续兜底生成 v=ts + 默认CDN
+	// 若未来接口返回对应字段，可在这里补充映射：
+	ret.DataOriginalDomain = toStr(obj["data_original_domain"])
+	ret.DataOriginal0 = toStr(obj["data_original_0"])
+	ret.DataOriginalQuery = toStr(obj["data_original_query"])
+
 	if fetchScrambleID {
 		sid, err := c.apiGetScrambleID(photoID)
 		if err == nil {

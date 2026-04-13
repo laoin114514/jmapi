@@ -158,6 +158,8 @@ func (d *Downloader) DownloadPhoto(photoID string) (*PhotoDetail, error) {
 	type imageJob struct {
 		index int
 		name  string
+		url   string
+		suffix string
 	}
 
 	jobs := make(chan imageJob)
@@ -168,47 +170,39 @@ func (d *Downloader) DownloadPhoto(photoID string) (*PhotoDetail, error) {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				if job.name == "" {
+				if job.url == "" {
 					continue
 				}
-				imgURL, err := photo.ImageURL(job.name)
-				if err != nil {
-					d.mu.Lock()
-					d.FailedImages = append(d.FailedImages, ImageFailure{
-						PhotoID:  photo.ID,
-						ImageURL: "",
-						SavePath: "",
-						Err:      err,
-					})
-					d.mu.Unlock()
-					continue
-				}
-				suffix := filepath.Ext(job.name)
+				suffix := job.suffix
 				if suffix == "" {
 					suffix = ".jpg"
 				}
 				suffix = d.Option.DecideImageSuffix(suffix)
 				savePath := filepath.Join(saveDir, d.Option.DecideImageFilename(job.index)+suffix)
 
-				_ = d.Plugins.BeforeImage(ctx, photo, imgURL, savePath)
-				if err := d.downloadOneImage(photo, imgURL, savePath); err != nil {
+				_ = d.Plugins.BeforeImage(ctx, photo, job.url, savePath)
+				if err := d.downloadOneImage(photo, job.url, savePath); err != nil {
 					d.mu.Lock()
 					d.FailedImages = append(d.FailedImages, ImageFailure{
 						PhotoID:  photo.ID,
-						ImageURL: imgURL,
+						ImageURL: job.url,
 						SavePath: savePath,
 						Err:      err,
 					})
 					d.mu.Unlock()
 					continue
 				}
-				_ = d.Plugins.AfterImage(ctx, photo, imgURL, savePath)
+				_ = d.Plugins.AfterImage(ctx, photo, job.url, savePath)
 			}
 		}()
 	}
 
-	for i, imageName := range photo.PageArr {
-		jobs <- imageJob{index: i + 1, name: imageName}
+	images, err := photo.Images()
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range images {
+		jobs <- imageJob{index: img.Index, name: img.ImgName, url: img.DownloadURL, suffix: img.Suffix}
 	}
 	close(jobs)
 	wg.Wait()
