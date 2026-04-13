@@ -17,6 +17,7 @@ type Client struct {
 	cfg        Config
 	httpClient *http.Client
 	fixedTS    string
+	impl       clientImpl
 }
 
 type apiEnvelope struct {
@@ -24,6 +25,32 @@ type apiEnvelope struct {
 	Data     json.RawMessage `json:"data"`
 	ErrorMsg string          `json:"errorMsg"`
 }
+
+type clientImpl interface {
+	GetAlbumDetail(albumID string) (*AlbumDetail, error)
+	GetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambleID bool) (*PhotoDetail, error)
+	CheckPhoto(photo *PhotoDetail) error
+	GetScrambleID(photoID string) (string, error)
+
+	Search(searchQuery string, page int, mainTag int, orderBy, timeRange, category, subCategory string) (*SearchResult, error)
+	CategoriesFilter(page int, timeRange, category, orderBy, subCategory string) (*SearchResult, error)
+
+	Setting() (map[string]any, error)
+	Login(username, password string) (map[string]any, error)
+	FavoriteFolder(page int, orderBy, folderID, username string) (*FavoriteResult, error)
+	AddFavoriteAlbum(albumID, folderID string) (map[string]any, error)
+	AlbumComment(videoID, comment, originator, status, commentID string) (map[string]any, error)
+
+	DownloadImage(imgURL string) ([]byte, error)
+	DownloadByImageDetail(photoID, imageName string) ([]byte, error)
+	DownloadAlbumCover(albumID string) ([]byte, error)
+
+	AutoUpdateDomains() error
+}
+
+type apiImpl struct{ c *Client }
+
+func newAPIImpl(c *Client) clientImpl { return &apiImpl{c: c} }
 
 func NewClient(cfg Config) *Client {
 	if cfg.ClientType == "" {
@@ -57,6 +84,13 @@ func NewClient(cfg Config) *Client {
 		c.fixedTS = strconv.FormatInt(time.Now().Unix(), 10)
 	}
 
+	// 双客户端统一抽象：对外仍是 *Client，对内按 ClientType 路由
+	if cfg.ClientType == ClientTypeHTML {
+		c.impl = newHTMLImpl(c)
+	} else {
+		c.impl = newAPIImpl(c)
+	}
+
 	if cfg.AutoUpdateHost && cfg.ClientType == ClientTypeAPI {
 		_ = c.AutoUpdateDomains()
 	}
@@ -83,6 +117,109 @@ func (c *Client) UpdateCookies(cookies map[string]string) {
 	for k, v := range cookies {
 		c.cfg.Cookies[k] = v
 	}
+}
+
+// ---------------- 统一门面：对外 API 不变 ----------------
+
+func (c *Client) GetAlbumDetail(albumID string) (*AlbumDetail, error) {
+	return c.impl.GetAlbumDetail(albumID)
+}
+
+func (c *Client) GetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambleID bool) (*PhotoDetail, error) {
+	return c.impl.GetPhotoDetail(photoID, fetchAlbum, fetchScrambleID)
+}
+
+func (c *Client) CheckPhoto(photo *PhotoDetail) error {
+	return c.impl.CheckPhoto(photo)
+}
+
+func (c *Client) GetScrambleID(photoID string) (string, error) {
+	return c.impl.GetScrambleID(photoID)
+}
+
+func (c *Client) Search(searchQuery string, page int, mainTag int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.impl.Search(searchQuery, page, mainTag, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) SearchSite(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.Search(searchQuery, page, 0, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) SearchWork(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.Search(searchQuery, page, 1, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) SearchAuthor(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.Search(searchQuery, page, 2, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) SearchTag(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.Search(searchQuery, page, 3, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) SearchActor(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+	return c.Search(searchQuery, page, 4, orderBy, timeRange, category, subCategory)
+}
+
+func (c *Client) CategoriesFilter(page int, timeRange, category, orderBy, subCategory string) (*SearchResult, error) {
+	return c.impl.CategoriesFilter(page, timeRange, category, orderBy, subCategory)
+}
+
+func (c *Client) MonthRanking(page int, category string) (*SearchResult, error) {
+	if category == "" {
+		category = CategoryAll
+	}
+	return c.CategoriesFilter(page, TimeMonth, category, OrderByView, "")
+}
+
+func (c *Client) WeekRanking(page int, category string) (*SearchResult, error) {
+	if category == "" {
+		category = CategoryAll
+	}
+	return c.CategoriesFilter(page, TimeWeek, category, OrderByView, "")
+}
+
+func (c *Client) DayRanking(page int, category string) (*SearchResult, error) {
+	if category == "" {
+		category = CategoryAll
+	}
+	return c.CategoriesFilter(page, TimeToday, category, OrderByView, "")
+}
+
+func (c *Client) Setting() (map[string]any, error) {
+	return c.impl.Setting()
+}
+
+func (c *Client) Login(username, password string) (map[string]any, error) {
+	return c.impl.Login(username, password)
+}
+
+func (c *Client) FavoriteFolder(page int, orderBy, folderID, username string) (*FavoriteResult, error) {
+	return c.impl.FavoriteFolder(page, orderBy, folderID, username)
+}
+
+func (c *Client) AddFavoriteAlbum(albumID, folderID string) (map[string]any, error) {
+	return c.impl.AddFavoriteAlbum(albumID, folderID)
+}
+
+func (c *Client) AlbumComment(videoID, comment, originator, status, commentID string) (map[string]any, error) {
+	return c.impl.AlbumComment(videoID, comment, originator, status, commentID)
+}
+
+func (c *Client) DownloadImage(imgURL string) ([]byte, error) {
+	return c.impl.DownloadImage(imgURL)
+}
+
+func (c *Client) DownloadByImageDetail(photoID, imageName string) ([]byte, error) {
+	return c.impl.DownloadByImageDetail(photoID, imageName)
+}
+
+func (c *Client) DownloadAlbumCover(albumID string) ([]byte, error) {
+	return c.impl.DownloadAlbumCover(albumID)
+}
+
+func (c *Client) AutoUpdateDomains() error {
+	return c.impl.AutoUpdateDomains()
 }
 
 func (c *Client) requestAPI(method, path string, query map[string]string, body map[string]any, forceSecret string) (map[string]any, error) {
@@ -336,9 +473,9 @@ func (c *Client) parseSearchResult(obj map[string]any) *SearchResult {
 	return ret
 }
 
-// ---------------- 详情接口 ----------------
+// ---------------- API 实现（供 apiImpl 调用） ----------------
 
-func (c *Client) GetAlbumDetail(albumID string) (*AlbumDetail, error) {
+func (c *Client) apiGetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	obj, err := c.requestAPI(http.MethodGet, "/album", map[string]string{"id": albumID}, nil, "")
 	if err != nil {
 		return nil, err
@@ -359,7 +496,7 @@ func (c *Client) GetAlbumDetail(albumID string) (*AlbumDetail, error) {
 	return ret, nil
 }
 
-func (c *Client) GetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambleID bool) (*PhotoDetail, error) {
+func (c *Client) apiGetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambleID bool) (*PhotoDetail, error) {
 	obj, err := c.requestAPI(http.MethodGet, "/chapter", map[string]string{"id": photoID}, nil, "")
 	if err != nil {
 		return nil, err
@@ -374,24 +511,24 @@ func (c *Client) GetPhotoDetail(photoID string, fetchAlbum bool, fetchScrambleID
 	ret.PageArr = toStrSlice(obj["images"])
 
 	if fetchScrambleID {
-		sid, err := c.GetScrambleID(photoID)
+		sid, err := c.apiGetScrambleID(photoID)
 		if err == nil {
 			ret.ScrambleID = sid
 		}
 	}
 	if fetchAlbum && ret.AlbumID != "" {
-		_, _ = c.GetAlbumDetail(ret.AlbumID)
+		_, _ = c.apiGetAlbumDetail(ret.AlbumID)
 	}
 
 	return ret, nil
 }
 
-func (c *Client) CheckPhoto(photo *PhotoDetail) error {
+func (c *Client) apiCheckPhoto(photo *PhotoDetail) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
 	}
 	if photo.AlbumID == "" || len(photo.PageArr) == 0 {
-		newPhoto, err := c.GetPhotoDetail(photo.ID, true, true)
+		newPhoto, err := c.apiGetPhotoDetail(photo.ID, true, true)
 		if err != nil {
 			return err
 		}
@@ -400,7 +537,7 @@ func (c *Client) CheckPhoto(photo *PhotoDetail) error {
 	return nil
 }
 
-func (c *Client) GetScrambleID(photoID string) (string, error) {
+func (c *Client) apiGetScrambleID(photoID string) (string, error) {
 	obj, err := c.requestAPI(http.MethodGet, "/chapter_view_template", map[string]string{
 		"id":            photoID,
 		"mode":          "vertical",
@@ -424,7 +561,7 @@ func (c *Client) GetScrambleID(photoID string) (string, error) {
 
 // ---------------- 搜索接口 ----------------
 
-func (c *Client) Search(searchQuery string, page int, mainTag int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
+func (c *Client) apiSearch(searchQuery string, page int, mainTag int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
 	obj, err := c.requestAPI(http.MethodGet, "/search", map[string]string{
 		"search_query": searchQuery,
 		"page":         strconv.Itoa(page),
@@ -438,29 +575,9 @@ func (c *Client) Search(searchQuery string, page int, mainTag int, orderBy, time
 	return c.parseSearchResult(obj), nil
 }
 
-func (c *Client) SearchSite(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
-	return c.Search(searchQuery, page, 0, orderBy, timeRange, category, subCategory)
-}
-
-func (c *Client) SearchWork(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
-	return c.Search(searchQuery, page, 1, orderBy, timeRange, category, subCategory)
-}
-
-func (c *Client) SearchAuthor(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
-	return c.Search(searchQuery, page, 2, orderBy, timeRange, category, subCategory)
-}
-
-func (c *Client) SearchTag(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
-	return c.Search(searchQuery, page, 3, orderBy, timeRange, category, subCategory)
-}
-
-func (c *Client) SearchActor(searchQuery string, page int, orderBy, timeRange, category, subCategory string) (*SearchResult, error) {
-	return c.Search(searchQuery, page, 4, orderBy, timeRange, category, subCategory)
-}
-
 // ---------------- 分类/排行接口 ----------------
 
-func (c *Client) CategoriesFilter(page int, timeRange, category, orderBy, subCategory string) (*SearchResult, error) {
+func (c *Client) apiCategoriesFilter(page int, timeRange, category, orderBy, subCategory string) (*SearchResult, error) {
 	o := orderBy
 	if timeRange != TimeAll && timeRange != "" {
 		o = orderBy + "_" + timeRange
@@ -479,34 +596,13 @@ func (c *Client) CategoriesFilter(page int, timeRange, category, orderBy, subCat
 	return c.parseSearchResult(obj), nil
 }
 
-func (c *Client) MonthRanking(page int, category string) (*SearchResult, error) {
-	if category == "" {
-		category = CategoryAll
-	}
-	return c.CategoriesFilter(page, TimeMonth, category, OrderByView, "")
-}
-
-func (c *Client) WeekRanking(page int, category string) (*SearchResult, error) {
-	if category == "" {
-		category = CategoryAll
-	}
-	return c.CategoriesFilter(page, TimeWeek, category, OrderByView, "")
-}
-
-func (c *Client) DayRanking(page int, category string) (*SearchResult, error) {
-	if category == "" {
-		category = CategoryAll
-	}
-	return c.CategoriesFilter(page, TimeToday, category, OrderByView, "")
-}
-
 // ---------------- 用户接口 ----------------
 
-func (c *Client) Setting() (map[string]any, error) {
+func (c *Client) apiSetting() (map[string]any, error) {
 	return c.requestAPI(http.MethodGet, "/setting", nil, nil, "")
 }
 
-func (c *Client) Login(username, password string) (map[string]any, error) {
+func (c *Client) apiLogin(username, password string) (map[string]any, error) {
 	obj, err := c.requestAPI(http.MethodPost, "/login", nil, map[string]any{
 		"username": username,
 		"password": password,
@@ -521,7 +617,7 @@ func (c *Client) Login(username, password string) (map[string]any, error) {
 	return obj, nil
 }
 
-func (c *Client) FavoriteFolder(page int, orderBy, folderID, username string) (*FavoriteResult, error) {
+func (c *Client) apiFavoriteFolder(page int, orderBy, folderID, username string) (*FavoriteResult, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -551,11 +647,11 @@ func (c *Client) FavoriteFolder(page int, orderBy, folderID, username string) (*
 	return ret, nil
 }
 
-func (c *Client) AddFavoriteAlbum(albumID, folderID string) (map[string]any, error) {
+func (c *Client) apiAddFavoriteAlbum(albumID, folderID string) (map[string]any, error) {
 	return c.requestAPI(http.MethodPost, "/favorite", nil, map[string]any{"aid": albumID}, "")
 }
 
-func (c *Client) AlbumComment(videoID, comment, originator, status, commentID string) (map[string]any, error) {
+func (c *Client) apiAlbumComment(videoID, comment, originator, status, commentID string) (map[string]any, error) {
 	if status == "" {
 		status = "true"
 	}
@@ -576,7 +672,7 @@ func (c *Client) AlbumComment(videoID, comment, originator, status, commentID st
 
 // ---------------- 图片接口 ----------------
 
-func (c *Client) DownloadImage(imgURL string) ([]byte, error) {
+func (c *Client) apiDownloadImage(imgURL string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, imgURL, nil)
 	if err != nil {
 		return nil, err
@@ -595,13 +691,13 @@ func (c *Client) DownloadImage(imgURL string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func (c *Client) DownloadByImageDetail(photoID, imageName string) ([]byte, error) {
-	photo, err := c.GetPhotoDetail(photoID, false, true)
+func (c *Client) apiDownloadByImageDetail(photoID, imageName string) ([]byte, error) {
+	photo, err := c.apiGetPhotoDetail(photoID, false, true)
 	if err != nil {
 		return nil, err
 	}
 	if photo.ScrambleID == "" {
-		photo.ScrambleID, _ = c.GetScrambleID(photoID)
+		photo.ScrambleID, _ = c.apiGetScrambleID(photoID)
 	}
 	if imageName == "" {
 		if len(photo.PageArr) == 0 {
@@ -612,17 +708,17 @@ func (c *Client) DownloadByImageDetail(photoID, imageName string) ([]byte, error
 
 	domain := "cdn-msp.jmapiproxy1.cc"
 	imgURL := fmt.Sprintf("https://%s/media/photos/%s/%s", domain, photo.AlbumID, imageName)
-	return c.DownloadImage(imgURL)
+	return c.apiDownloadImage(imgURL)
 }
 
-func (c *Client) DownloadAlbumCover(albumID string) ([]byte, error) {
+func (c *Client) apiDownloadAlbumCover(albumID string) ([]byte, error) {
 	imgURL := fmt.Sprintf("https://cdn-msp.jmapiproxy1.cc/media/albums/%s_3x4.jpg", albumID)
-	return c.DownloadImage(imgURL)
+	return c.apiDownloadImage(imgURL)
 }
 
 // ---------------- 域名相关接口 ----------------
 
-func (c *Client) AutoUpdateDomains() error {
+func (c *Client) apiAutoUpdateDomains() error {
 	for _, u := range DefaultAPIDomainServerURLs {
 		serverList, err := c.reqAPIDomainServer(u)
 		if err != nil || len(serverList) == 0 {
