@@ -61,13 +61,32 @@ func (d *Downloader) DownloadAlbum(albumID string) (*AlbumDetail, error) {
 		photoIDs = []string{album.ID}
 	}
 
-	for _, pid := range photoIDs {
-		if _, err := d.DownloadPhoto(pid); err != nil {
-			d.mu.Lock()
-			d.FailedPhotos = append(d.FailedPhotos, PhotoFailure{PhotoID: pid, Err: err})
-			d.mu.Unlock()
-		}
+	workerCount := d.Option.Download.Threading.Photo
+	if workerCount <= 0 {
+		workerCount = 1
 	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pid := range jobs {
+				if _, err := d.DownloadPhoto(pid); err != nil {
+					d.mu.Lock()
+					d.FailedPhotos = append(d.FailedPhotos, PhotoFailure{PhotoID: pid, Err: err})
+					d.mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	for _, pid := range photoIDs {
+		jobs <- pid
+	}
+	close(jobs)
+	wg.Wait()
 
 	return album, nil
 }
@@ -91,32 +110,57 @@ func (d *Downloader) DownloadPhoto(photoID string) (*PhotoDetail, error) {
 		return nil, err
 	}
 
-	for i, imageName := range photo.PageArr {
-		if imageName == "" {
-			continue
-		}
-		imgURL := fmt.Sprintf("https://cdn-msp.jmapiproxy1.cc/media/photos/%s/%s", photo.AlbumID, imageName)
-		suffix := filepath.Ext(imageName)
-		if suffix == "" {
-			suffix = ".jpg"
-		}
-		suffix = d.Option.DecideImageSuffix(suffix)
-		savePath := filepath.Join(saveDir, d.Option.DecideImageFilename(i+1)+suffix)
-
-		_ = d.Plugins.BeforeImage(ctx, photo, imgURL, savePath)
-		if err := d.downloadOneImage(photo, imgURL, savePath); err != nil {
-			d.mu.Lock()
-			d.FailedImages = append(d.FailedImages, ImageFailure{
-				PhotoID:  photo.ID,
-				ImageURL: imgURL,
-				SavePath: savePath,
-				Err:      err,
-			})
-			d.mu.Unlock()
-			continue
-		}
-		_ = d.Plugins.AfterImage(ctx, photo, imgURL, savePath)
+	imageWorkerCount := d.Option.Download.Threading.Image
+	if imageWorkerCount <= 0 {
+		imageWorkerCount = 1
 	}
+
+	type imageJob struct {
+		index int
+		name  string
+	}
+
+	jobs := make(chan imageJob)
+	var wg sync.WaitGroup
+
+	for i := 0; i < imageWorkerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if job.name == "" {
+					continue
+				}
+				imgURL := fmt.Sprintf("https://cdn-msp.jmapiproxy1.cc/media/photos/%s/%s", photo.AlbumID, job.name)
+				suffix := filepath.Ext(job.name)
+				if suffix == "" {
+					suffix = ".jpg"
+				}
+				suffix = d.Option.DecideImageSuffix(suffix)
+				savePath := filepath.Join(saveDir, d.Option.DecideImageFilename(job.index)+suffix)
+
+				_ = d.Plugins.BeforeImage(ctx, photo, imgURL, savePath)
+				if err := d.downloadOneImage(photo, imgURL, savePath); err != nil {
+					d.mu.Lock()
+					d.FailedImages = append(d.FailedImages, ImageFailure{
+						PhotoID:  photo.ID,
+						ImageURL: imgURL,
+						SavePath: savePath,
+						Err:      err,
+					})
+					d.mu.Unlock()
+					continue
+				}
+				_ = d.Plugins.AfterImage(ctx, photo, imgURL, savePath)
+			}
+		}()
+	}
+
+	for i, imageName := range photo.PageArr {
+		jobs <- imageJob{index: i + 1, name: imageName}
+	}
+	close(jobs)
+	wg.Wait()
 
 	return photo, nil
 }
