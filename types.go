@@ -35,6 +35,7 @@ type AlbumDetail struct {
 	CommentCount int            `json:"comment_count,omitempty"`
 	Likes        string         `json:"likes,omitempty"`
 	Views        string         `json:"views,omitempty"`
+	EpisodeIDs   []string       `json:"episode_ids,omitempty"`
 	Raw          map[string]any `json:"raw,omitempty"`
 }
 

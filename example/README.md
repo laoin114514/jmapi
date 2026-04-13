@@ -1,7 +1,5 @@
 # jmapi examples
 
-下面示例均在 `goRebuild` 目录下运行。
-
 ## 准备
 
 1. 进入目录：
@@ -32,3 +30,6 @@ go run ./example/album_detail -id 123456
 - `example/favorite`：登录后读取收藏夹
 - `example/comment`：登录后发表评论
 - `example/image`：下载封面图
+- `example/option_usage`：Option 配置与目录规则
+- `example/downloader_basic`：Downloader 下载一本
+- `example/plugin_simple`：插件回调示例
