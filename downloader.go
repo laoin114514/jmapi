@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 )
 
@@ -170,7 +171,13 @@ func (d *Downloader) downloadOneImage(photo *PhotoDetail, imageURL, savePath str
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(savePath, data, 0o644); err != nil {
+
+	segNum := 0
+	if d.Option.Download.Image.Decode {
+		sid, _ := strconv.Atoi(photo.ScrambleID)
+		segNum = segmentationNumByURL(sid, imageURL)
+	}
+	if err := decodeAndSaveImage(data, savePath, segNum); err != nil {
 		return err
 	}
 
